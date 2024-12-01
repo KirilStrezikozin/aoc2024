@@ -1,0 +1,4 @@
+# This file is for specific ignores in this directory.
+
+# Ignore final input for the task.
+input1.txt
