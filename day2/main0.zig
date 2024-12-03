@@ -34,23 +34,20 @@ pub fn main() !void {
 
         var n_prev: i64 = -1;
         var direction: i8 = 0; // down (-1), no (0), up (1).
-
-        std.debug.print("\n", .{});
-        std.debug.print("{s}\n", .{line});
+        var is_level_safe: usize = 0;
 
         var it = std.mem.tokenizeAny(u8, line, " \t\n");
         while (true) {
             const token = it.next() orelse break;
             if (token.len == 0) {
                 // Potential line break.
-                std.debug.print("line break\n", .{});
                 break;
             }
 
+            is_level_safe = 0;
+
             const n = try std.fmt.parseInt(i64, token, 10);
-            std.debug.print("{d} {d} '{s}' ", .{ n_prev, n, token });
             if (n_prev == -1) {
-                std.debug.print("- first number\n", .{});
                 // First number in line.
                 n_prev = n;
                 continue;
@@ -61,12 +58,11 @@ pub fn main() !void {
             if (n > n_prev) {
                 local_direction = 1;
                 local_diff = n - n_prev;
-            } else if (n_prev < n) {
+            } else if (n < n_prev) {
                 local_direction = -1;
                 local_diff = n_prev - n;
             } else {
                 // Same numbers, unsafe.
-                std.debug.print("same numbers\n", .{});
                 break;
             }
 
@@ -74,19 +70,19 @@ pub fn main() !void {
                 direction = local_direction;
             } else if (local_direction != direction) {
                 // Unstable direction, unsafe.
-                std.debug.print("direction\n", .{});
                 break;
             }
 
-            if ((min_diff < local_diff) or (local_diff > max_diff)) {
+            if ((min_diff > local_diff) or (local_diff > max_diff)) {
                 // Unstable difference, unsafe.
-                std.debug.print("diff\n", .{});
                 break;
             }
 
-            safety += 1;
+            is_level_safe = 1;
+            n_prev = n;
         }
 
+        safety += is_level_safe;
         line_i += 1;
     }
 
