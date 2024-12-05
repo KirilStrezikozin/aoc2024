@@ -1,18 +1,22 @@
 const std = @import("std");
 
+const Allocator = std.mem.Allocator;
+
 const PageValue = u32;
 const Page = std.AutoHashMap(PageValue, void);
 const PageGraph = std.AutoHashMap(PageValue, *Page);
 
+const Update = std.ArrayList(PageValue);
+
 // Returns a pointer to a newly allocated and initialized Page.
-fn allocPage(ally: *const std.mem.Allocator) !*Page {
+fn allocPage(ally: *const Allocator) !*Page {
     const new_page_ptr = try ally.*.create(Page);
     new_page_ptr.* = Page.init(ally.*);
     return new_page_ptr;
 }
 
 // Iteratively frees each of the given Page Graph's inner Page hash maps.
-fn freeGraphPages(ally: *const std.mem.Allocator, graph_ptr: *PageGraph) void {
+fn freeGraphPages(ally: *const Allocator, graph_ptr: *PageGraph) void {
     var it = graph_ptr.*.valueIterator();
     while (it.next()) |val_ptr| {
         const page_ptr: *Page = val_ptr.*;
@@ -39,17 +43,10 @@ fn printRelations(graph_ptr: *PageGraph) void {
     }
 }
 
-fn process(ally: *const std.mem.Allocator, buff: []const u8) !void {
-    // Allocate on the heap to avoid invalidated stack pointers.
-    // Same is done for inner Page hash maps.
-    const graph_ptr = try ally.*.create(PageGraph);
-    graph_ptr.* = PageGraph.init(ally.*);
-
-    var graph = graph_ptr.*;
-    defer freeGraphPages(ally, &graph);
-    defer ally.*.destroy(graph_ptr);
-
-    var updates_i: usize = 0; // Byte index at which updates start.
+// Processes the part of the file with rules and updates the Page Graph hash
+// map. Returns the byte offset at which to continue processing the buffer.
+fn read_graph(ally: *const Allocator, buff: []const u8, g: *PageGraph) !usize {
+    var seek: usize = 0; // Byte index at which updates start.
 
     var line_len: usize = 0;
     var line_start: usize = 0;
@@ -71,7 +68,7 @@ fn process(ally: *const std.mem.Allocator, buff: []const u8) !void {
         } else if (c == '\n') {
             if (line_len <= 1) {
                 // Empty line, proceed to updates.
-                updates_i = i + 1;
+                seek = i + 1;
                 break;
             }
 
@@ -80,90 +77,112 @@ fn process(ally: *const std.mem.Allocator, buff: []const u8) !void {
             page_num = 0;
 
             // Add both pages to the graph.
-            var page_l: ?*Page = graph.get(page_lnum);
+            var page_l: ?*Page = g.get(page_lnum);
             if (page_l == null) {
                 const new_page = try allocPage(ally);
-                try graph.put(page_lnum, new_page);
+                try g.put(page_lnum, new_page);
                 page_l = new_page;
             }
 
-            if (graph.get(page_rnum)) |_| {} else {
+            if (!g.contains(page_rnum)) {
                 const new_page = try allocPage(ally);
-                try graph.put(page_rnum, new_page);
+                try g.put(page_rnum, new_page);
             }
 
             // Assign relation.
-            if (page_l) |page| {
-                try page.put(page_rnum, {});
-            } else unreachable;
+            try page_l.?.put(page_rnum, {});
 
             line_len = 0;
             line_start = i + 1;
         } else unreachable; // Unexpected character.
     }
 
-    // TODO: process updates.
-    // std.debug.print("Updates: {s}\n\n", .{buff[updates_i..]});
-    printRelations(&graph);
+    return seek;
+}
 
-    // Process updates.
-    var relations: ?*Page = null;
-    var line_valid: bool = true;
+// Checks a single update record. If the order of pages is correct according to
+// relations in the given Page Graph, returns the page number at the middle,
+// otherwise zero.
+fn verify_update(array_ptr: *const []PageValue, graph: *PageGraph) !PageValue {
+    const array = array_ptr.*;
 
-    line_start = updates_i;
-    var sum: usize = 0;
+    if (array.len == 0) unreachable;
+    if (array.len == 1) return array[0];
 
-    for (buff[updates_i..], updates_i..) |c, i| {
-        if (c == '\n') {
-            relations = null;
+    var relations: ?*Page = graph.get(array[0]);
 
-            if (!line_valid) {
-                std.debug.print("Invalid: {s}\n", .{buff[line_start..i]});
-                line_valid = true;
-                line_start = i + 1;
-                continue;
-            }
+    for (1..array.len) |i| {
+        const curr_num = array[i];
 
-            const num_start: usize = (i + line_start) / 2 - 1;
-            const num = try std.fmt.parseInt(PageValue, buff[num_start .. num_start + 2], 10);
-            sum += num;
+        // Skip unknown page numbers.
+        if (!graph.contains(curr_num)) continue;
 
-            line_start = i + 1;
-        } else if (!line_valid) {
-            continue;
-        }
+        // Order not maintained.
+        if (!relations.?.*.contains(curr_num)) return 0;
 
-        // Parse digit.
-        else if (('0' <= c) and (c <= '9')) {
-            page_num = page_num * 10 + c - '0';
-        } else if (c == ',') {
-            const current_num = page_num;
-            page_num = 0;
-
-            // First number in line.
-            if (relations == null) {
-                if (graph.get(current_num)) |new_relations| {
-                    relations = new_relations;
-                }
-                continue;
-            }
-
-            // Skip unknown page numbers.
-            if (!graph.contains(current_num)) continue;
-
-            // Order not maintained.
-            if (!relations.?.*.contains(current_num)) {
-                line_valid = false;
-                std.debug.print("Bad number: {d}\n", .{current_num});
-                continue;
-            }
-
-            // Advance relations.
-            relations = graph.get(current_num);
-        }
+        // Advance relations.
+        relations = graph.get(curr_num);
     }
 
+    // Return page value at the middle.
+    // std.debug.print("{any} is valid\n", .{array});
+    return array[array.len / 2];
+}
+
+// Processes the page updates line by line.
+// Returns the final sum of middle page values of verified updates.
+fn verify_udpates(buff: []const u8, array: *Update, graph: *PageGraph) !usize {
+    var sum: usize = 0;
+    var insert_i: usize = 0;
+
+    var it = std.mem.tokenizeScalar(u8, buff, '\n');
+    while (it.next()) |update_buff| {
+        insert_i = 0;
+
+        var tokenizer = std.mem.tokenizeScalar(u8, update_buff, ',');
+        while (tokenizer.next()) |token| {
+            const page = try std.fmt.parseInt(PageValue, token, 10);
+
+            if (array.items.len <= insert_i) {
+                try array.append(page);
+            } else {
+                array.items[insert_i] = page;
+            }
+
+            insert_i += 1;
+        }
+
+        sum += try verify_update(&array.items[0..insert_i], graph);
+    }
+
+    return sum;
+}
+
+fn process(ally: *const Allocator, buff: []const u8) !void {
+    // Allocate graph on the heap to avoid invalidated stack pointers.
+    // Same is done for inner Page hash maps.
+    const graph_ptr = try ally.*.create(PageGraph);
+    graph_ptr.* = PageGraph.init(ally.*);
+
+    var graph = graph_ptr.*;
+    defer freeGraphPages(ally, &graph);
+    defer ally.*.destroy(graph_ptr);
+
+    // Read rules into the graph.
+    const seek = try read_graph(ally, buff, &graph);
+    // printRelations(&graph);
+
+    // Process updates.
+    const array_ptr = try ally.*.create(Update);
+    array_ptr.* = Update.init(ally.*);
+
+    var array = array_ptr.*;
+    defer array.deinit();
+    defer ally.*.destroy(array_ptr);
+
+    const sum = try verify_udpates(buff[seek..], &array, &graph);
     std.debug.print("{d}\n", .{sum});
+
     return;
 }
 
@@ -193,6 +212,4 @@ pub fn main() !void {
 
     // Process the file.
     try process(&pg_ally, file_buff);
-
-    // std.debug.print("{d}\n", .{count});
 }
