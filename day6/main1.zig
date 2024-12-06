@@ -9,7 +9,7 @@ const Mark = 'X';
 /// Historians' new obstacle.
 const RetroEncabulator = 'O';
 /// Stores possible position for the RetroEncabulator.
-const REPositions = [][2]usize;
+const RELocations = []Point;
 
 /// Indicates what a Guard currently faces in front.
 const Face = enum(u8) {
@@ -148,12 +148,17 @@ fn read_map(ally: *const Allocator, b: []u8, guard: *Guard) !Map {
     return array.toOwnedSlice();
 }
 
-fn read_obstructions(ally: *const Allocator, buff: u8) !REPositions {
-    var guard = Guard.default;
-    const map: Map = try read_map(ally, buff, &guard);
+/// Returns all possible (x, y) locations for the RetroEncabulator obstacle.
+/// It overwrites the contents of given Map and Guard. Client's are responsible
+/// for providing copies of these values if needed.
+fn read_re(ally: *const Allocator, map: Map, guard_ptr: *Guard) !RELocations {
+    var array = std.ArrayList(Point).init(ally.*);
+    defer array.deinit();
 
-    // Mark initial position as visited.
-    var visited: usize = 1;
+    var guard = guard_ptr.*;
+
+    // Mark initial position as visited, but do not add it to the list of
+    // possible RetroEncabulator locations.
     map[guard.y][guard.x] = Mark;
 
     walk: while (true) {
@@ -163,42 +168,84 @@ fn read_obstructions(ally: *const Allocator, buff: u8) !REPositions {
             .mark => guard.move(),
             .empty => {
                 guard.move();
-                visited += 1;
                 map[guard.y][guard.x] = Mark;
+                try array.append(.{ .y = guard.y, .x = guard.x });
             },
         }
     }
+
+    return array.toOwnedSlice();
 }
 
 fn process(ally: *const Allocator, buff: []u8) !usize {
-    var guard = Guard.default;
-
     // Construct positions for the new obstacle.
-    // Do not modify the given buffer.
+    // Do not modify the given buffer to be able to reset the Map.
     const buff_cp = try ally.alloc(u8, buff.len);
     std.mem.copyForwards(u8, buff_cp, buff);
     defer ally.free(buff_cp);
 
+    // Working map and guard.
+    var guard = Guard.default;
     const map: Map = try read_map(ally, buff_cp, &guard);
 
-    // Mark initial position as visited.
-    var visited: usize = 1;
-    map[guard.y][guard.x] = Mark;
+    // Save initial guard states.
+    const spawnPoint: Point = .{ .x = guard.x, .y = guard.y };
+    const spawnDir: Direction = guard.direction;
 
-    walk: while (true) {
-        switch (guard.face(map)) {
-            .end_of_map => break :walk,
-            .obstacle => guard.turn_90(),
-            .mark => guard.move(),
-            .empty => {
-                guard.move();
-                visited += 1;
-                map[guard.y][guard.x] = Mark;
-            },
+    // Read all possible RetroEncabulator obstacle locations.
+    const relocs = try read_re(ally, map, &guard);
+
+    var stucks: usize = 0;
+
+    for (relocs) |loc| {
+        // Reset (clear) map using the fallback source buffer.
+        std.mem.copyForwards(u8, buff_cp, buff);
+
+        // Reset guard to her starting state.
+        guard.y = spawnPoint.y;
+        guard.x = spawnPoint.x;
+        guard.direction = spawnDir;
+
+        // Place new obstacle.
+        map[loc.y][loc.x] = RetroEncabulator;
+
+        // Check if guard is stuck in a loop.
+        var new_visited: usize = 1;
+        var dejavu: usize = 0;
+
+        // Mark initial position as visited.
+        map[guard.y][guard.x] = Mark;
+
+        walk: while (true) {
+            switch (guard.face(map)) {
+                .end_of_map => break :walk,
+                .obstacle => {
+                    guard.turn_90();
+
+                    if (new_visited > 0) {
+                        // The guard had already walked this route before.
+                        new_visited = 0;
+                        continue :walk;
+                    }
+
+                    // Make the guard walk the same route enough times to
+                    // be sure this is a closed loop.
+                    dejavu += 1;
+                    if (dejavu < 10) continue;
+                    stucks += 1;
+                    break :walk;
+                },
+                .mark => guard.move(),
+                .empty => {
+                    guard.move();
+                    map[guard.y][guard.x] = Mark;
+                    new_visited += 1;
+                },
+            }
         }
     }
 
-    return visited;
+    return stucks;
 }
 
 pub fn main() !void {
@@ -226,6 +273,6 @@ pub fn main() !void {
     defer pg_ally.free(file_buff);
 
     // Process the file.
-    const visited = try process(&pg_ally, file_buff);
-    std.debug.print("{d}\n", .{visited});
+    const stucks = try process(&pg_ally, file_buff);
+    std.debug.print("{d}\n", .{stucks});
 }
