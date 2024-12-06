@@ -2,34 +2,30 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
-const Map = [][]u8;
-const Obstacle = '#';
+const Empty = '.';
 const Mark = 'X';
-
-/// Historians' new obstacle.
-const RetroEncabulator = 'O';
-/// Stores possible position for the RetroEncabulator.
-const RELocations = []Point;
-
-/// Indicates what a Guard currently faces in front.
-const Face = enum(u8) {
-    end_of_map,
-    obstacle,
-    mark,
-    empty,
-};
+const Obstacle = '#';
+const RetroEncabulator = 'O'; // Historians' new obstacle.
 
 /// Direction is a (dx, dy) difference to apply to a (x, y) point.
 const Direction = struct {
     dx: i64 = 0,
     dy: i64 = 0,
+
+    /// Returns true if both Directions are identical.
+    inline fn isEqual(self: *const Direction, other: *const Direction) bool {
+        return ((self.dx == other.dx) and (self.dy == other.dy));
+    }
 };
 
 /// Point is a (x, y) mapping on a 2d coordinate system.
-const Point = struct {
-    x: usize = undefined,
-    y: usize = undefined,
-};
+const Point = struct { x: usize = undefined, y: usize = undefined };
+
+const Map = [][]u8;
+const Obstacles = std.AutoHashMap(
+    Point,
+    struct { visited: bool, direction: Direction },
+);
 
 /// Guard is an entity that walks the Map.
 const Guard = struct {
@@ -45,64 +41,55 @@ const Guard = struct {
     };
 
     /// Move this Guard according to its direction.
-    pub fn move(self: *Guard) void {
+    fn move(self: *Guard) void {
         const new_x: i64 = self.direction.dx + @as(i64, @intCast(self.x));
         const new_y: i64 = self.direction.dy + @as(i64, @intCast(self.y));
 
-        self.*.x = @as(usize, @intCast(new_x));
-        self.*.y = @as(usize, @intCast(new_y));
+        self.x = @as(usize, @intCast(new_x));
+        self.y = @as(usize, @intCast(new_y));
     }
 
     /// Move to the specified (x, y) coordinate.
-    pub fn moveTo(self: *Guard, x: usize, y: usize) void {
-        self.*.x = x;
-        self.*.y = y;
+    inline fn moveTo(self: *Guard, x: usize, y: usize) void {
+        self.x = x;
+        self.y = y;
     }
 
-    /// Returns a Face enum indicating what the Guard currently faces in front.
-    pub fn face(self: *Guard, map: Map) Face {
-        const new_x: i64 = self.direction.dx + @as(i64, @intCast(self.x));
-        const new_y: i64 = self.direction.dy + @as(i64, @intCast(self.y));
+    /// Returns the location of the value that the Guard is currently facing or
+    /// null if that location is invalid.
+    fn face(self: *Guard, map: Map) ?Point {
+        const new_ix: i64 = self.direction.dx + @as(i64, @intCast(self.x));
+        const new_iy: i64 = self.direction.dy + @as(i64, @intCast(self.y));
 
-        if ((new_x < 0) or (new_x >= @as(i64, @intCast(map[self.y].len)))) {
-            return .end_of_map;
-        } else if ((new_y < 0) or (new_y >= @as(i64, @intCast(map.len)))) {
-            return .end_of_map;
+        if ((new_ix < 0) or (new_iy < 0)) return null;
+
+        const new_x = @as(usize, @intCast(new_ix));
+        const new_y = @as(usize, @intCast(new_iy));
+
+        if ((new_x >= map[self.y].len) or (new_y >= map.len)) return null;
+
+        return .{ .x = new_x, .y = new_y };
+    }
+
+    /// Turns the Guard's walking direction by 90 degrees clockwise.
+    inline fn turn_90(self: *Guard) void {
+        const dy = self.direction.dy;
+        const dx = self.direction.dx;
+
+        if (dy == 0) {
+            self.direction.dx = dy;
+            self.direction.dy = dx;
+        } else {
+            self.direction.dx -= dy;
+            self.direction.dy -= dy;
         }
-
-        const new_ux = @as(usize, @intCast(new_x));
-        const new_uy = @as(usize, @intCast(new_y));
-
-        return switch (map[new_uy][new_ux]) {
-            Mark => .mark,
-            Obstacle, RetroEncabulator => .obstacle,
-            else => .empty,
-        };
-    }
-
-    /// Turns the Guard's walking direction by 90 degrees.
-    pub fn turn_90(self: *Guard) void {
-        const dx = self.*.direction.dx;
-        const dy = self.*.direction.dy;
-        if ((dx == 0) and (dy == -1)) { // Up.
-            self.*.direction.dx = 1;
-            self.*.direction.dy = 0;
-        } else if ((dx == 1) and (dy == 0)) { // Right.
-            self.*.direction.dx = 0;
-            self.*.direction.dy = 1;
-        } else if ((dx == 0) and (dy == 1)) { // Down.
-            self.*.direction.dx = -1;
-            self.*.direction.dy = 0;
-        } else if ((dx == -1) and (dy == 0)) { // Left.
-            self.*.direction.dx = 0;
-            self.*.direction.dy = -1;
-        } else unreachable;
     }
 };
 
-/// Returns a 2d view onto the given file buffer,split by newline characters.
 /// Positions the given Guard struct in the starting position found on the map.
-fn read_map(ally: *const Allocator, b: []u8, guard: *Guard) !Map {
+/// Fills a hash map with all obstacle locations.
+/// Returns a 2d view onto the given file buffer, split by newline characters.
+fn read_map(ally: *const Allocator, b: []u8, guard: *Guard, obstacles: *Obstacles) !Map {
     var array = std.ArrayList([]u8).init(ally.*);
     defer array.deinit();
 
@@ -119,29 +106,35 @@ fn read_map(ally: *const Allocator, b: []u8, guard: *Guard) !Map {
                 row_start = i + 1;
                 row_i += 1;
                 col_i = 0;
+                continue;
             },
             '^' => {
                 guard.moveTo(col_i, row_i);
-                guard.*.direction = .{ .dx = 0, .dy = -1 };
+                guard.direction = .{ .dx = 0, .dy = -1 };
             },
             '>' => {
                 guard.moveTo(col_i, row_i);
-                guard.*.direction = .{ .dx = 1, .dy = 0 };
+                guard.direction = .{ .dx = 1, .dy = 0 };
             },
             'v' => {
                 guard.moveTo(col_i, row_i);
-                guard.*.direction = .{ .dx = 0, .dy = 1 };
+                guard.direction = .{ .dx = 0, .dy = 1 };
             },
             '<' => {
                 guard.moveTo(col_i, row_i);
-                guard.*.direction = .{ .dx = -1, .dy = 0 };
+                guard.direction = .{ .dx = -1, .dy = 0 };
             },
-            else => {
-                if (i == last_i) { // No final newline.
-                    try array.append(b[row_start..]);
-                }
-                col_i += 1;
-            },
+            Obstacle => try obstacles.put(
+                .{ .x = col_i, .y = row_i },
+                .{ .visited = false, .direction = undefined },
+            ),
+            Empty => {},
+            else => unreachable,
+        }
+
+        col_i += 1;
+        if (i == last_i) { // No final newline.
+            try array.append(b[row_start..]);
         }
     }
 
@@ -151,42 +144,37 @@ fn read_map(ally: *const Allocator, b: []u8, guard: *Guard) !Map {
 /// Returns all possible (x, y) locations for the RetroEncabulator obstacle.
 /// It overwrites the contents of given Map and Guard. Client's are responsible
 /// for providing copies of these values if needed.
-fn read_re(ally: *const Allocator, map: Map, guard_ptr: *Guard) !RELocations {
+fn read_re(ally: *const Allocator, map: Map, guard: *Guard) ![]Point {
     var array = std.ArrayList(Point).init(ally.*);
     defer array.deinit();
-
-    var guard = guard_ptr.*;
 
     // Mark initial position as visited, but do not add it to the list of
     // possible RetroEncabulator locations.
     map[guard.y][guard.x] = Mark;
 
-    walk: while (true) {
-        switch (guard.face(map)) {
-            .end_of_map => break :walk,
-            .obstacle => guard.turn_90(),
-            .mark => guard.move(),
-            .empty => {
+    while (true) {
+        if (guard.face(map)) |point| switch (map[point.y][point.x]) {
+            Obstacle, RetroEncabulator => guard.turn_90(),
+            Mark => guard.move(),
+            else => {
                 guard.move();
                 map[guard.y][guard.x] = Mark;
                 try array.append(.{ .y = guard.y, .x = guard.x });
             },
-        }
+        } else break; // Beyond the map.
     }
 
     return array.toOwnedSlice();
 }
 
 fn process(ally: *const Allocator, buff: []u8) !usize {
-    // Construct positions for the new obstacle.
-    // Do not modify the given buffer to be able to reset the Map.
-    const buff_cp = try ally.alloc(u8, buff.len);
-    std.mem.copyForwards(u8, buff_cp, buff);
-    defer ally.free(buff_cp);
-
-    // Working map and guard.
+    // Working map, guard, and obstacles.
     var guard = Guard.default;
-    const map: Map = try read_map(ally, buff_cp, &guard);
+
+    var obstacles = Obstacles.init(ally.*);
+    defer obstacles.deinit();
+
+    const map = try read_map(ally, buff, &guard, &obstacles);
 
     // Save initial guard states.
     const spawnPoint: Point = .{ .x = guard.x, .y = guard.y };
@@ -198,8 +186,11 @@ fn process(ally: *const Allocator, buff: []u8) !usize {
     var stucks: usize = 0;
 
     for (relocs) |loc| {
-        // Reset (clear) map using the fallback source buffer.
-        std.mem.copyForwards(u8, buff_cp, buff);
+        // De-visit all obstacles.
+        var vit = obstacles.valueIterator();
+        while (vit.next()) |ob| {
+            ob.visited = false;
+        }
 
         // Reset guard to her starting state.
         guard.y = spawnPoint.y;
@@ -208,41 +199,30 @@ fn process(ally: *const Allocator, buff: []u8) !usize {
 
         // Place new obstacle.
         map[loc.y][loc.x] = RetroEncabulator;
+        try obstacles.put(loc, .{ .visited = false, .direction = undefined });
 
-        // Check if guard is stuck in a loop.
-        var new_visited: usize = 1;
-        var dejavu: usize = 0;
-
-        // Mark initial position as visited.
-        map[guard.y][guard.x] = Mark;
-
-        walk: while (true) {
-            switch (guard.face(map)) {
-                .end_of_map => break :walk,
-                .obstacle => {
+        while (true) {
+            if (guard.face(map)) |point| switch (map[point.y][point.x]) {
+                Obstacle, RetroEncabulator => {
                     guard.turn_90();
 
-                    if (new_visited > 0) {
-                        // The guard had already walked this route before.
-                        new_visited = 0;
-                        continue :walk;
+                    const ob = obstacles.getPtr(point).?;
+                    if (ob.visited and ob.direction.isEqual(&guard.direction)) {
+                        // The guard had already walked here - loop.
+                        stucks += 1;
+                        break;
                     }
 
-                    // Make the guard walk the same route enough times to
-                    // be sure this is a closed loop.
-                    dejavu += 1;
-                    if (dejavu < 10) continue;
-                    stucks += 1;
-                    break :walk;
+                    ob.visited = true;
+                    ob.direction = guard.direction;
                 },
-                .mark => guard.move(),
-                .empty => {
-                    guard.move();
-                    map[guard.y][guard.x] = Mark;
-                    new_visited += 1;
-                },
-            }
+                else => guard.move(),
+            } else break; // Beyond the map.
         }
+
+        // Remove the new obstacle.
+        _ = obstacles.remove(loc);
+        map[loc.y][loc.x] = Empty;
     }
 
     return stucks;
