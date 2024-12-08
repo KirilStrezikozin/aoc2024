@@ -7,17 +7,20 @@ const Antinode = '#';
 
 const max_usize = std.math.maxInt(usize);
 
+/// Returns the number of lines between a and b indices based off line length.
+inline fn NLines(comptime T: type, a: T, b: T, lineLen: T) T {
+    return @divTrunc(a, lineLen) - @divTrunc(b, lineLen);
+}
+
 fn process(ally: *const Allocator, map: []const u8) !usize {
     // Last antennas store indices of last antennas.
     var last_antennas: ['z' - '0' + 1]usize = undefined;
+    if (last_antennas.len <= 'Z' - '0') @compileError("Invalid ASCII table");
     for (0..last_antennas.len) |i| {
         last_antennas[i] = max_usize;
     }
 
-    if (last_antennas.len <= 'Z' - '0') @compileError("Invalid ASCII table");
-
     // Linked antennas store indices of previous similar antennas.
-
     var linked_antennas = try ally.alloc(usize, map.len);
     defer ally.free(linked_antennas);
     for (0..linked_antennas.len) |i| {
@@ -26,7 +29,6 @@ fn process(ally: *const Allocator, map: []const u8) !usize {
 
     // Anti-nodes store an updated map with anti-node markings.
     var antinodes_n: usize = 0;
-
     var antinodes = try ally.alloc(u8, map.len);
     defer ally.free(antinodes);
     std.mem.copyForwards(u8, antinodes, map);
@@ -58,56 +60,34 @@ fn process(ally: *const Allocator, map: []const u8) !usize {
         // std.debug.print("\nAntenna:\n", .{});
         while (prev_i != max_usize) {
             // std.debug.print("Curr: {d}, Prev: {d}\n", .{ curr_i, prev_i });
-            const dist: usize = curr_i - prev_i;
 
             // Calculate line breaks between the two antennas.
-            var lines: usize = 0;
-            for (prev_i..curr_i) |ii| {
-                if (map[ii] == '\n') {
-                    lines += 1;
-                }
+            // Used to verify if anti-nodes are within the map area.
+            const nlines = NLines(usize, curr_i, prev_i, lineLen);
+            const dist = curr_i - prev_i;
+
+            // Anti-node 1.
+            var ai, const overflow = @subWithOverflow(prev_i, dist);
+            if ((overflow != 1) and
+                (nlines == NLines(usize, prev_i, ai, lineLen)) and
+                (antinodes[ai] != Antinode))
+            {
+                antinodes[ai] = Antinode;
+                antinodes_n += 1;
             }
 
-            if (prev_i >= dist) {
-                const anti_i1: usize = prev_i - dist;
-
-                // Verify the same number of line breaks.
-                var lines_i1: usize = 0;
-                for (anti_i1..prev_i) |ii| {
-                    if (map[ii] == '\n') {
-                        lines_i1 += 1;
-                    }
-                }
-
-                if (lines_i1 == lines) {
-                    if (antinodes[anti_i1] != Antinode) {
-                        antinodes[anti_i1] = Antinode;
-                        antinodes_n += 1;
-                    }
-                }
+            // Anti-node 2.
+            ai = curr_i + dist;
+            if ((ai < map.len) and
+                (nlines == NLines(usize, ai, curr_i, lineLen)) and
+                (antinodes[ai] != Antinode))
+            {
+                antinodes[ai] = Antinode;
+                antinodes_n += 1;
             }
 
-            const anti_i2: usize = curr_i + dist;
-            if (anti_i2 < map.len) {
-
-                // Verify the same number of line breaks.
-                var lines_i2: usize = 0;
-                for (curr_i..anti_i2) |ii| {
-                    if (map[ii] == '\n') {
-                        lines_i2 += 1;
-                    }
-                }
-
-                if (lines_i2 == lines) {
-                    if (antinodes[anti_i2] != Antinode) {
-                        antinodes[anti_i2] = Antinode;
-                        antinodes_n += 1;
-                    }
-                }
-            }
-
-            // curr_i = prev_i;
             prev_i = linked_antennas[prev_i];
+
             // std.debug.print("Previous antenna at {d}=?\n", .{prev_i});
         }
     }
