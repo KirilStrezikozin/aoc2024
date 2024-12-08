@@ -54,21 +54,19 @@ fn process(ally: *const Allocator, map: []const u8) !usize {
         linked_antennas[i] = last_antennas[asi];
         last_antennas[asi] = i;
 
-        // Form anti-nodes with all previous similar antennas.
+        // Form resonant anti-nodes with all previous similar antennas.
         const curr_i = i;
         var prev_i = linked_antennas[curr_i];
-        // std.debug.print("\nAntenna:\n", .{});
         while (prev_i != max_usize) {
-            // std.debug.print("Curr: {d}, Prev: {d}\n", .{ curr_i, prev_i });
-
             // Calculate line breaks between the two antennas.
-            // Used to verify if anti-nodes are within the map area.
+            // Used to verify whether new anti-nodes are within the map area.
             const nlines = NLines(usize, curr_i, prev_i, lineLen);
             const dist = curr_i - prev_i;
 
             // Anti-node 1.
             var ai, const overflow = @subWithOverflow(prev_i, dist);
             if ((overflow != 1) and
+                (map[ai] != '\n') and
                 (nlines == NLines(usize, prev_i, ai, lineLen)) and
                 (antinodes[ai] != Antinode))
             {
@@ -79,6 +77,7 @@ fn process(ally: *const Allocator, map: []const u8) !usize {
             // Anti-node 2.
             ai = curr_i + dist;
             if ((ai < map.len) and
+                (map[ai] != '\n') and
                 (nlines == NLines(usize, ai, curr_i, lineLen)) and
                 (antinodes[ai] != Antinode))
             {
@@ -87,8 +86,6 @@ fn process(ally: *const Allocator, map: []const u8) !usize {
             }
 
             prev_i = linked_antennas[prev_i];
-
-            // std.debug.print("Previous antenna at {d}=?\n", .{prev_i});
         }
     }
 
