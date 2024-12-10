@@ -76,18 +76,6 @@ fn compact(ally: *const Allocator, fm: FileMap) !usize {
         r_i -= 2;
     }
 
-    // std.debug.print("fm: ", .{});
-    // for (fm) |v| {
-    //     std.debug.print("{d}", .{v});
-    // }
-    // std.debug.print("\n", .{});
-    //
-    // std.debug.print("xid: {any}\n", .{xid});
-    // std.debug.print("xorder: {any}\n", .{xorder});
-    // std.debug.print("xfm: {any}\n", .{xfm});
-    //
-    // std.debug.print("files: {d}\n", .{files});
-
     // Calculate checksum.
     var checksum: usize = 0;
 
@@ -112,7 +100,6 @@ fn compact(ally: *const Allocator, fm: FileMap) !usize {
             c += 1;
         }
 
-        // std.debug.print("Print id({d})x{d} and {d} dots from {d}-{d} orders\n", .{ xid[i], xfm[i], dots, l_i + 1, xorder[i] });
         l_i = xorder[i];
     }
 
