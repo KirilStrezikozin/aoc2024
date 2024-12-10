@@ -34,7 +34,6 @@ fn trail_score(map: Map, row_i: usize, col_i: usize, block_dir: ?usize) usize {
 
     const head = map[row_i][col_i];
     if (head == TrailEnd) {
-        // std.debug.print("Reached 9\n", .{});
         // Mark this end unreachable again.
         map[row_i][col_i] = Unreachable;
         return 1;
@@ -54,7 +53,6 @@ fn trail_score(map: Map, row_i: usize, col_i: usize, block_dir: ?usize) usize {
 
         if ((nrow_i >= map.len) or (ncol_i >= map[row_i].len)) continue;
         if (map[nrow_i][ncol_i] == head + 1) {
-            // std.debug.print("Go from {d}.{d} to {d}.{d}, block {d}\n", .{ row_i, col_i, nrow_i, ncol_i, block_dirs[i] });
             score += trail_score(map, nrow_i, ncol_i, block_dirs[i]);
         }
     }
@@ -112,7 +110,6 @@ fn process(ally: *const Allocator, buff: []u8) !usize {
             if (map[row_i][col_i] != TrailStart) continue;
             const score1 = trail_score(map, row_i, col_i, null);
             reset_map(map);
-            // std.debug.print("Score at {d}.{d}: {d}\n", .{ row_i, col_i, score1 });
             score += score1;
         }
     }
