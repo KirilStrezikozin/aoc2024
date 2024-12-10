@@ -87,7 +87,7 @@ const Guard = struct {
     }
 };
 
-/// Returns a 2d view onto the given file buffer,split by newline characters.
+/// Returns a 2d view onto the given file buffer, split by newline characters.
 /// Positions the given Guard struct in the starting position found on the map.
 fn read_map(ally: *const Allocator, b: []u8, guard: *Guard) !Map {
     var array = std.ArrayList([]u8).init(ally.*);
