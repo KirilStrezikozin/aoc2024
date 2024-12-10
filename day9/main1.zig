@@ -3,87 +3,117 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const FileMap = []u8;
 
+const max_usize = std.math.maxInt(usize);
+
 /// Compact the file contents of the given dense file format map.
 /// Returns the resulting checksum of the new file contents in the file map.
 fn compact(ally: *const Allocator, fm: FileMap) !usize {
     if (fm.len == 0) return 0;
 
     var r_fid: usize = @divTrunc(fm.len, 2) - (1 - @mod(fm.len, 2));
-
-    var l_i: usize = 1;
-    var r_i: usize = fm.len - 1 - (1 - @mod(fm.len, 2));
+    var r_i: usize = r_fid * 2;
 
     // Allocate a compressed file index map.
-    var xfm = try ally.alloc(u8, fm.len);
     var xid = try ally.alloc(usize, fm.len);
+    var xorder = try ally.alloc(usize, fm.len);
+    var xfm = try ally.alloc(u8, fm.len);
     defer ally.free(xfm);
+    defer ally.free(xorder);
     defer ally.free(xid);
 
     for (0..fm.len) |i| {
-        xfm[i] = 0;
+        fm[i] -= '0';
+        xorder[i] = max_usize;
     }
 
+    // Put 0th file.
     xid[0] = 0;
-    xfm[0] = fm[0] - '0';
+    xorder[0] = 0;
+    xfm[0] = fm[0];
+    fm[0] = 0;
 
+    var files: usize = 1;
     while (r_fid > 0) {
-        l_i = 1;
+        var l_i: usize = 1;
+        files += 1;
 
+        // Find a free spot before the file on the right.
         while (l_i < r_i) {
-            // Check the current free space spot capacity.
-            if (fm[l_i] >= fm[r_i]) {
-                // Enough space available.
-                fm[l_i] = fm[l_i] - fm[r_i] + '0';
-                std.debug.print("Storing {d} at pos {d}\n", .{ r_fid, l_i / 2 + 1 });
-                break;
-            } else {
-                // Not enough space available.
+            if (fm[l_i] < fm[r_i]) {
                 l_i += 2;
+                continue;
             }
+
+            // Enough space available, move the file.
+            fm[l_i] -= fm[r_i];
+            fm[r_i - 1] += fm[r_i]; // Moved file leaves free space behind it.
+            break;
         } else {
             l_i = r_i;
-            std.debug.print("Leaving {d} at pos {d}\n", .{ r_fid, l_i / 2 + 1 });
         }
 
-        // Insert file into x.
-        var x_i: usize = @divTrunc(l_i, 2) + 1;
-        if (xfm[x_i] != 0) {
-            // Already occupied, shift to allow for space after.
-            for (0..fm.len - x_i - 1) |i| {
-                xfm[xfm.len - i - 1] = xfm[xfm.len - i - 2];
-                xid[xid.len - i - 1] = xid[xid.len - i - 2];
-            }
+        // Determine the new file location in the file map.
+        var x_i: usize = 0;
+        while ((x_i < fm.len) and (xorder[x_i] <= l_i)) {
             x_i += 1;
         }
 
-        xid[x_i] = r_fid;
-        xfm[x_i] = fm[r_i] - '0';
+        var i: usize = fm.len - 1;
+        while ((i > x_i) and (i > 0)) {
+            xid[i] = xid[i - 1];
+            xorder[i] = xorder[i - 1];
+            xfm[i] = xfm[i - 1];
+            i -= 1;
+        }
 
-        // Proceed with the next file from the right.
-        r_i -= 2;
+        xid[x_i] = r_fid;
+        xorder[x_i] = l_i;
+        xfm[x_i] = fm[r_i];
+        fm[r_i] = 0;
+
+        // Proceed to the next file from the right.
         r_fid -= 1;
+        r_i -= 2;
     }
 
-    std.debug.print("IDs: {any}\n", .{xid});
-    std.debug.print("FMs: {any}\n", .{xfm});
-    // std.debug.print("size: {d}\n", .{x_i});
+    // std.debug.print("fm: ", .{});
+    // for (fm) |v| {
+    //     std.debug.print("{d}", .{v});
+    // }
+    // std.debug.print("\n", .{});
+    //
+    // std.debug.print("xid: {any}\n", .{xid});
+    // std.debug.print("xorder: {any}\n", .{xorder});
+    // std.debug.print("xfm: {any}\n", .{xfm});
+    //
+    // std.debug.print("files: {d}\n", .{files});
 
     // Calculate checksum.
     var checksum: usize = 0;
+
+    var l_i: usize = 0;
     var c: usize = 0;
-    for (0..fm.len) |i| {
-        std.debug.print("Printing {d} id {d} times", .{ xid[i], xfm[i] });
+
+    for (0..files) |i| {
+        if (xorder[i] == max_usize) continue;
+
+        var dots: usize = 0;
+        if (l_i != xorder[i]) {
+            for (l_i..xorder[i]) |j| {
+                for (0..fm[j]) |_| {
+                    c += 1;
+                    dots += 1;
+                }
+            }
+        }
+
         for (0..xfm[i]) |_| {
             checksum += c * xid[i];
             c += 1;
         }
 
-        if (i * 2 + 1 < fm.len) {
-            std.debug.print(" and {d} dots\n", .{fm[i * 2 + 1] - '0'});
-            for (0..fm[i * 2 + 1] - '0') |_| {
-                c += 1;
-            }
-        }
+        // std.debug.print("Print id({d})x{d} and {d} dots from {d}-{d} orders\n", .{ xid[i], xfm[i], dots, l_i + 1, xorder[i] });
+        l_i = xorder[i];
     }
 
     return checksum;
