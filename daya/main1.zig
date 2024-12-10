@@ -27,18 +27,11 @@ fn sub(a: usize, b: usize) struct { usize, u1 } {
 const Operation = *const fn (a: usize, b: usize) struct { usize, u1 };
 const dirs_op = [_]Operation{ add, add, sub, sub };
 
-// Returns the number of times the given map[row_i][col_i] reached
-// TrailEnd from its position.
 fn trail_score(map: Map, row_i: usize, col_i: usize, block_dir: ?usize) usize {
     var score: usize = 0;
 
     const head = map[row_i][col_i];
-    if (head == TrailEnd) {
-        // std.debug.print("Reached 9\n", .{});
-        // Mark this end unreachable again.
-        // map[row_i][col_i] = Unreachable;
-        return 1;
-    }
+    if (head == TrailEnd) return 1;
 
     var nrow_i: usize = undefined;
     var ncol_i: usize = undefined;
@@ -54,7 +47,6 @@ fn trail_score(map: Map, row_i: usize, col_i: usize, block_dir: ?usize) usize {
 
         if ((nrow_i >= map.len) or (ncol_i >= map[row_i].len)) continue;
         if (map[nrow_i][ncol_i] == head + 1) {
-            // std.debug.print("Go from {d}.{d} to {d}.{d}, block {d}\n", .{ row_i, col_i, nrow_i, ncol_i, block_dirs[i] });
             score += trail_score(map, nrow_i, ncol_i, block_dirs[i]);
         }
     }
@@ -93,16 +85,6 @@ fn read_map(ally: *const Allocator, buff: []u8) !Map {
     return array.toOwnedSlice();
 }
 
-fn reset_map(map: Map) void {
-    for (0..map.len) |row_i| {
-        for (0..map[row_i].len) |col_i| {
-            if (map[row_i][col_i] == Unreachable) {
-                map[row_i][col_i] = TrailEnd;
-            }
-        }
-    }
-}
-
 fn process(ally: *const Allocator, buff: []u8) !usize {
     const map: Map = try read_map(ally, buff);
     var score: usize = 0;
@@ -110,10 +92,7 @@ fn process(ally: *const Allocator, buff: []u8) !usize {
     for (0..map.len) |row_i| {
         for (0..map[row_i].len) |col_i| {
             if (map[row_i][col_i] != TrailStart) continue;
-            const score1 = trail_score(map, row_i, col_i, null);
-            // reset_map(map);
-            // std.debug.print("Score at {d}.{d}: {d}\n", .{ row_i, col_i, score1 });
-            score += score1;
+            score += trail_score(map, row_i, col_i, null);
         }
     }
 
