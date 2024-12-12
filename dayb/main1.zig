@@ -3,9 +3,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const Stone = usize;
-const Lookup = std.AutoHashMap(Stone, usize);
+const Lookup = std.AutoHashMap(struct { num: Stone, decade: usize }, usize);
 
-const StopAtDecade = @as(usize, 75);
+const StopAtDecade: usize = 75;
 
 fn read_line(ally: *const Allocator, buff: []u8) ![]Stone {
     var array = std.ArrayList(Stone).init(ally.*);
@@ -22,33 +22,33 @@ fn read_line(ally: *const Allocator, buff: []u8) ![]Stone {
 
 inline fn Ndigits(stone: Stone) usize {
     var n: usize = 1;
-    var a = stone / 10;
-    while (a > 0) {
+    var d: usize = 10;
+    while (d < stone) {
         n += 1;
-        a /= 10;
+        d *= 10;
     }
 
     return n;
 }
 
 fn Ncount(num: Stone, decade: usize, lookup: *Lookup) !usize {
-    if (decade >= StopAtDecade) {
-        // try lookup.put(num, 1);
+    if (lookup.get(.{ .num = num, .decade = decade })) |count| return count;
+
+    if (decade == 0) {
+        try lookup.put(.{ .num = num, .decade = 0 }, 1);
         return 1;
     }
 
-    // if (lookup.get(num)) |count| return count;
-
     if (num == 0) {
-        const count = try Ncount(1, decade + 1, lookup);
-        // try lookup.put(num, count);
+        const count = try Ncount(1, decade - 1, lookup);
+        try lookup.put(.{ .num = num, .decade = decade }, count);
         return count;
     }
 
     const ndigits = Ndigits(num);
     if (ndigits % 2 == 1) {
-        const count = try Ncount(num * 2024, decade + 1, lookup);
-        // try lookup.put(num, count);
+        const count = try Ncount(num * 2024, decade - 1, lookup);
+        try lookup.put(.{ .num = num, .decade = decade }, count);
         return count;
     }
 
@@ -56,8 +56,8 @@ fn Ncount(num: Stone, decade: usize, lookup: *Lookup) !usize {
     const numl: Stone = num / div;
     const numr: Stone = num % div;
 
-    const count = try Ncount(numl, decade + 1, lookup) + try Ncount(numr, decade + 1, lookup);
-    // try lookup.put(num, count);
+    const count = try Ncount(numl, decade - 1, lookup) + try Ncount(numr, decade - 1, lookup);
+    try lookup.put(.{ .num = num, .decade = decade }, count);
     return count;
 }
 
@@ -67,12 +67,13 @@ fn process(ally: *const Allocator, buff: []u8) !usize {
     var lookup = Lookup.init(ally.*);
     defer lookup.deinit();
 
-    var count: usize = 0;
+    var sum: usize = 0;
     for (stones) |stone| {
-        count += try Ncount(stone, 0, &lookup);
+        const count = try Ncount(stone, StopAtDecade, &lookup);
+        sum += count;
     }
 
-    return count;
+    return sum;
 }
 
 pub fn main() !void {
@@ -100,8 +101,8 @@ pub fn main() !void {
     defer pg_ally.free(file_buff);
 
     // Process the file.
-    const count = try process(&pg_ally, file_buff);
-    std.debug.print("{d}\n", .{count});
+    const sum = try process(&pg_ally, file_buff);
+    std.debug.print("{d}\n", .{sum});
 
     // std.debug.print("{d}\n", .{Ndigits(1)});
     // std.debug.print("{d}\n", .{Ndigits(10)});
