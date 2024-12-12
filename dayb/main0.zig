@@ -90,11 +90,4 @@ pub fn main() !void {
     // Process the file.
     const count = try process(&pg_ally, file_buff);
     std.debug.print("{d}\n", .{count});
-
-    // std.debug.print("{d}\n", .{Ndigits(1)});
-    // std.debug.print("{d}\n", .{Ndigits(10)});
-    // std.debug.print("{d}\n", .{Ndigits(999)});
-    // std.debug.print("{d}\n", .{Ndigits(20245)});
-    // std.debug.print("{d}\n", .{Ndigits(6666)});
-    // std.debug.print("{d}\n", .{Ndigits(23)});
 }
