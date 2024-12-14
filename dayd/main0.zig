@@ -76,7 +76,7 @@ fn solve_diophantine_u(cm: *const ClawMachine) i64 {
                 .y = ka_i64 * cm.buttons[0].dy + kb_i64 * cm.buttons[1].dy,
             };
 
-            const nprice = ka * PriceA + kb * PriceB;
+            const nprice = ka_i64 * PriceA + kb_i64 * PriceB;
             if ((loc.x == cm.prize.x) and (loc.y == cm.prize.y) and nprice < price) {
                 price = nprice;
             }
