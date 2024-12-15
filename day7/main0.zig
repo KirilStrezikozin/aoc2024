@@ -24,7 +24,7 @@ fn div(a: TestValue, b: TestValue) TestValue {
 const operators = [_]Operator{ add, mul };
 
 /// Calibrates the given slice of test values by recursively applying operators.
-/// Returns a true if the test values were calibrated.
+/// Returns true if the test values were calibrated.
 fn calibrate(reach: TestValue, curr: TestValue, nums: []const TestValue) bool {
     if (nums.len == 0) return false;
     for (operators) |operator| {

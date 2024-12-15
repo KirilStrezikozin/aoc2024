@@ -72,7 +72,7 @@ fn read_map(ally: Allocator, b: []u8) !struct { m: Map, r: Robot, s: usize } {
                 col_i = 0;
             },
             else => {
-                if (c == '@') {
+                if (c == RobotC) {
                     robot.y = row_i;
                     robot.x = col_i;
                 }

@@ -1,7 +1,5 @@
 const std = @import("std");
 
-// 7773 too low.
-
 const Allocator = std.mem.Allocator;
 
 const MapWidth = @as(i64, 101);
@@ -66,7 +64,7 @@ fn heuristic(
     return nn;
 }
 
-fn print_map(map: Map) !void {
+fn print_map(map: Map) void {
     const ansi_black = "\x1b[30m";
     const ansi_green = "\x1b[32m";
     const ansi_rst = "\x1b[0m";
@@ -144,7 +142,7 @@ fn process(ally: Allocator, buff: []const u8) !usize {
             const x_u: usize = @intCast(r.x);
             const y_u: usize = @intCast(r.y);
             if (heuristic(map, y_u, x_u, 0, HeuristicLimit, 4, v) <= HeuristicLimit) break;
-            try print_map(map);
+            print_map(map);
             return t;
         }
     }
