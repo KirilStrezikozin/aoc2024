@@ -43,8 +43,9 @@ fn arrange(design: []const u8, ps: *Patterns, ch: []usize, i: usize) !void {
 fn process(ally: Allocator, buff: []u8) !usize {
     // Read patterns and seek the buffer to where designs start.
     const rp = try read_patterns(ally, buff);
-    var ps: Patterns = rp.ps;
     const designs = buff[rp.seek..];
+    var ps: Patterns = rp.ps;
+    defer ps.deinit();
 
     // {
     //     std.debug.print("Patterns:\n", .{});
