@@ -32,10 +32,8 @@ fn displayable(design: []const u8, ps: *Patterns, ch: []CheckerTag, i: usize) !b
         .Unknown => {},
     }
 
-    // std.debug.print("{s}\n", .{design});
     var r: usize = design.len;
     while (r > 0) : (r -= 1) {
-        // std.debug.print("Checking design: {s}, portion: {s}\n", .{ design, design[l..r] });
         if (ps.get(design[0..r]) == null) continue;
 
         if ((r == design.len) or (try displayable(design[r..], ps, ch, i + r))) {
