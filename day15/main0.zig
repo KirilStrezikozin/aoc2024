@@ -5,6 +5,7 @@ const Allocator = std.mem.Allocator;
 // 163246 too high.
 // 153990 too low.
 // 159558
+// 150302
 
 const Code = []const u8;
 const Codes = []const Code;
@@ -13,17 +14,17 @@ const Location = struct { y: usize, x: usize };
 
 fn Numeric(key: u8) Location {
     const table = [_]Location{
-        .{ .y = 3, .x = 1 }, // 0.
-        .{ .y = 2, .x = 0 }, // 1.
-        .{ .y = 2, .x = 1 }, // 2.
-        .{ .y = 2, .x = 2 }, // 3.
-        .{ .y = 1, .x = 0 }, // 4.
-        .{ .y = 1, .x = 1 }, // 5.
-        .{ .y = 1, .x = 2 }, // 6.
-        .{ .y = 0, .x = 0 }, // 7.
-        .{ .y = 0, .x = 1 }, // 8.
-        .{ .y = 0, .x = 2 }, // 9.
-        .{ .y = 3, .x = 2 }, // A.
+        .{ .y = 0, .x = 1 }, // 0.
+        .{ .y = 1, .x = 0 }, // 1.
+        .{ .y = 1, .x = 1 }, // 2.
+        .{ .y = 1, .x = 2 }, // 3.
+        .{ .y = 2, .x = 0 }, // 4.
+        .{ .y = 2, .x = 1 }, // 5.
+        .{ .y = 2, .x = 2 }, // 6.
+        .{ .y = 3, .x = 0 }, // 7.
+        .{ .y = 3, .x = 1 }, // 8.
+        .{ .y = 3, .x = 2 }, // 9.
+        .{ .y = 0, .x = 2 }, // A.
     };
 
     return switch (key) {
@@ -35,11 +36,11 @@ fn Numeric(key: u8) Location {
 
 fn Directional(key: u8) Location {
     const table = [_]Location{
-        .{ .y = 0, .x = 1 }, // ^.
-        .{ .y = 1, .x = 0 }, // <.
-        .{ .y = 1, .x = 1 }, // v.
-        .{ .y = 1, .x = 2 }, // >.
-        .{ .y = 0, .x = 2 }, // A.
+        .{ .y = 1, .x = 1 }, // ^.
+        .{ .y = 0, .x = 0 }, // <.
+        .{ .y = 0, .x = 1 }, // v.
+        .{ .y = 0, .x = 2 }, // >.
+        .{ .y = 1, .x = 2 }, // A.
     };
 
     return switch (key) {
@@ -81,93 +82,155 @@ fn parse(ally: Allocator, buff: []u8) !Codes {
     return try array.toOwnedSlice();
 }
 
+fn buildCode(ally: Allocator, code: []const u8, numeric: bool) ![]const u8 {
+    var slave = Keypad{
+        .numeric = numeric,
+        .loc = if (numeric) Numeric('A') else Directional('A'),
+    };
+
+    var mcode = std.ArrayList(u8).init(ally);
+    defer mcode.deinit();
+
+    for (code) |skey| {
+        const slave_nloc = slave.getKey(skey);
+
+        const xdist: usize, const left: bool = blk: {
+            if (slave_nloc.x >= slave.loc.x) {
+                break :blk .{ slave_nloc.x - slave.loc.x, false };
+            } else {
+                break :blk .{ slave.loc.x - slave_nloc.x, true };
+            }
+        };
+
+        const ydist: usize, const up: bool = blk: {
+            if (slave_nloc.y >= slave.loc.y) {
+                break :blk .{ slave_nloc.y - slave.loc.y, true };
+            } else {
+                break :blk .{ slave.loc.y - slave_nloc.y, false };
+            }
+        };
+
+        if (numeric) {
+            std.debug.print("{d} (left is {}) {d}\n", .{ xdist, left, ydist });
+        }
+
+        // Prioritize lest turns and < over ^ over v over >.
+
+        if (numeric) {
+            if ((slave.loc.y == 0) and (slave_nloc.x == 0)) {
+                try mcode.appendNTimes(if (up) '^' else 'v', ydist);
+                try mcode.appendNTimes(if (left) '<' else '>', xdist);
+            } else if ((slave.loc.x == 0) and (slave_nloc.y == 0)) {
+                try mcode.appendNTimes(if (left) '<' else '>', xdist);
+                try mcode.appendNTimes(if (up) '^' else 'v', ydist);
+            } else if (left) {
+                try mcode.appendNTimes(if (left) '<' else '>', xdist);
+                try mcode.appendNTimes(if (up) '^' else 'v', ydist);
+            } else {
+                try mcode.appendNTimes(if (up) '^' else 'v', ydist);
+                try mcode.appendNTimes(if (left) '<' else '>', xdist);
+            }
+        } else {
+            if ((slave.loc.x == 0) and (slave_nloc.y == 1)) {
+                try mcode.appendNTimes(if (left) '<' else '>', xdist);
+                try mcode.appendNTimes(if (up) '^' else 'v', ydist);
+            } else if ((slave.loc.y == 1) and (slave_nloc.x == 0)) {
+                try mcode.appendNTimes(if (up) '^' else 'v', ydist);
+                try mcode.appendNTimes(if (left) '<' else '>', xdist);
+            } else if (left) {
+                try mcode.appendNTimes(if (left) '<' else '>', xdist);
+                try mcode.appendNTimes(if (up) '^' else 'v', ydist);
+            } else {
+                try mcode.appendNTimes(if (up) '^' else 'v', ydist);
+                try mcode.appendNTimes(if (left) '<' else '>', xdist);
+            }
+        }
+
+        try mcode.append('A');
+        slave.loc = slave_nloc;
+    }
+
+    if (numeric) {
+        std.debug.print("{s}\n", .{mcode.items});
+    }
+    return try mcode.toOwnedSlice();
+}
+
+const MaxDepth: usize = 25;
+const Cache = std.StringHashMap([MaxDepth]usize);
+
+fn splitCode(ally: Allocator, code: []const u8) ![]const []const u8 {
+    var array = std.ArrayList([]const u8).init(ally);
+    defer array.deinit();
+
+    var l: usize = 0;
+    for (0..code.len) |r| {
+        if (code[r] == 'A') {
+            try array.append(code[l .. r + 1]);
+            l = r + 1;
+        }
+    }
+
+    return try array.toOwnedSlice();
+}
+
+fn robotics(ally: Allocator, code: []const u8, depth: usize, cache: *Cache) !usize {
+    if (cache.get(code)) |cached| {
+        if (cached[depth - 1] != 0) return cached[depth - 1];
+    } else {
+        try cache.put(code, .{0} ** MaxDepth);
+    }
+
+    const mcode = try buildCode(ally, code, false);
+    defer ally.free(mcode);
+
+    {
+        var entry = cache.get(code).?;
+        entry[0] = mcode.len;
+    }
+
+    if (depth == MaxDepth) return mcode.len;
+
+    std.debug.print("{d} {d} {d}\n", .{ depth, cache.count(), mcode.len });
+
+    var complexity: usize = 0;
+    const mmcodes = try splitCode(ally, mcode);
+    defer ally.free(mmcodes);
+
+    for (mmcodes) |mmcode| {
+        const local_complexity = try robotics(ally, mmcode, depth + 1, cache);
+
+        if (cache.get(mmcode) == null) {
+            try cache.put(mmcode, .{0} ** MaxDepth);
+        }
+
+        var mentry = cache.get(mmcode).?;
+        mentry[0] = local_complexity;
+        complexity += local_complexity;
+    }
+
+    {
+        var entry = cache.get(code).?;
+        entry[depth - 1] = complexity;
+    }
+
+    return complexity;
+}
+
 fn process(ally: Allocator, buff: []u8) !usize {
     const codes = try parse(ally, buff);
 
-    var scode = std.ArrayList(u8).init(ally);
-    defer scode.deinit();
+    var cache = Cache.init(ally);
+    defer cache.deinit();
 
     var complexity: usize = 0;
 
-    for (codes) |c| {
-        std.debug.print("\nCode:\n", .{});
+    for (codes) |code| {
+        const mcode = try buildCode(ally, code, true);
+        const local_complexity = try robotics(ally, mcode, 1, &cache);
 
-        try scode.resize(c.len);
-        @memcpy(scode.items, c);
-
-        for (0..3) |slave_i| {
-            const numeric = slave_i == 0;
-            var slave = Keypad{
-                .numeric = numeric,
-                .loc = if (numeric) Numeric('A') else Directional('A'),
-            };
-
-            var mcode = std.ArrayList(u8).init(ally);
-
-            std.debug.print("{s}\n", .{scode.items});
-            for (scode.items) |skey| {
-                const slave_nloc = slave.getKey(skey);
-
-                const xdist: usize, const left: bool = blk: {
-                    if (slave_nloc.x > slave.loc.x) {
-                        break :blk .{ slave_nloc.x - slave.loc.x, false };
-                    } else {
-                        break :blk .{ slave.loc.x - slave_nloc.x, true };
-                    }
-                };
-
-                const ydist: usize, const up: bool = blk: {
-                    if (slave_nloc.y > slave.loc.y) {
-                        break :blk .{ slave_nloc.y - slave.loc.y, false };
-                    } else {
-                        break :blk .{ slave.loc.y - slave_nloc.y, true };
-                    }
-                };
-
-                // if (numeric and !up) {
-                //     try mcode.appendNTimes(if (left) '<' else '>', xdist);
-                //     try mcode.appendNTimes(if (up) '^' else 'v', ydist);
-                // } else if (numeric and up) {
-                //     try mcode.appendNTimes(if (up) '^' else 'v', ydist);
-                //     try mcode.appendNTimes(if (left) '<' else '>', xdist);
-                // } else if (!up) {
-                //     try mcode.appendNTimes(if (up) '^' else 'v', ydist);
-                //     try mcode.appendNTimes(if (left) '<' else '>', xdist);
-                // } else {
-                //     try mcode.appendNTimes(if (left) '<' else '>', xdist);
-                //     try mcode.appendNTimes(if (up) '^' else 'v', ydist);
-                // }
-
-                if (false) {
-                    try mcode.appendNTimes(if (left) '<' else '>', xdist);
-                    try mcode.appendNTimes(if (up) '^' else 'v', ydist);
-                } else {
-                    try mcode.appendNTimes(if (up) '^' else 'v', ydist);
-                    try mcode.appendNTimes(if (left) '<' else '>', xdist);
-                }
-
-                try mcode.append('A');
-                slave.loc = slave_nloc;
-            }
-
-            try scode.resize(mcode.items.len);
-            std.debug.print("new code len={d}\n", .{mcode.items.len});
-            @memcpy(scode.items, mcode.items);
-            mcode.deinit();
-        }
-        std.debug.print("{s}\n", .{scode.items});
-
-        const local_complexity = try std.fmt.parseInt(usize, c[0 .. c.len - 1], 10) * scode.items.len;
-        std.debug.print(
-            "Complexity: {d}*{d}={d}\n",
-            .{
-                try std.fmt.parseInt(usize, c[0 .. c.len - 1], 10),
-                scode.items.len,
-                local_complexity,
-            },
-        );
-
-        complexity += local_complexity;
+        const code_numeric = try std.fmt.parseInt(usize, code[0 .. code.len - 1], 10);
+        complexity += code_numeric * local_complexity;
     }
 
     return complexity;
