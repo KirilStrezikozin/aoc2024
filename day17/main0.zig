@@ -3,28 +3,22 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const Endpoint = u16;
-const Connections = std.AutoHashMap(Endpoint, void);
+const Connections = std.AutoHashMap(Endpoint, Connection);
 const Graph = std.AutoHashMap(Endpoint, Connections);
 
-const Trackable = struct {
-    const Self = @This();
+const Connection = enum(u1) {
+    Free,
+    Blocked,
+};
 
+const Trackable = struct {
     me: Endpoint,
+    from: Endpoint,
     target: Endpoint,
 
     depth: usize,
-
-    fn compareFn(_: void, a: Self, b: Self) std.math.Order {
-        const target_order = std.math.order(b.target, a.target);
-        if (target_order != .eq) return target_order;
-
-        const depth_order = std.math.order(b.depth, a.depth);
-        if (depth_order == .eq) return std.math.order(b.me, a.me);
-        return depth_order;
-    }
+    pickle: usize,
 };
-
-const Queue = std.PriorityQueue(Trackable, void, Trackable.compareFn);
 
 const MoveBits = @bitSizeOf(u8);
 const DescriptorSize = 2 + 1 + 2; // In bytes.
@@ -45,9 +39,68 @@ fn endpointAsSlice(e: *const Endpoint) *const [2]u8 {
 
 /// Returns a copy of the given string as an endpoint.
 fn endpointFromSlice(s: *const [2]u8) Endpoint {
-    return (@as(Endpoint, @intCast(s[1])) << MoveBits) +
+    return (@as(Endpoint, @intCast(s[1])) << MoveBits) |
         @as(Endpoint, @intCast(s[0]));
 }
+
+/// Returns a Cycle hash based off the 3 given Endpoints.
+const Cycles = struct {
+    const Self = @This();
+    const Cycle = u48;
+
+    ally: Allocator,
+    data: std.AutoHashMap(Cycle, void),
+
+    fn init(ally: Allocator) Cycles {
+        return Self{
+            .ally = ally,
+            .data = std.AutoHashMap(Cycle, void).init(ally),
+        };
+    }
+
+    fn deinit(self: *Self) void {
+        self.data.deinit();
+    }
+
+    /// Hashes the three given endpoints to form a cycle.
+    /// If the cycle is already present, returns false.
+    /// Otherwise, stores it and returns true.
+    fn hash(self: *Self, es: *const [3]Endpoint) !bool {
+        std.debug.print(
+            "Given {s}-{s}-{s},",
+            .{
+                endpointAsSlice(&es[0]),
+                endpointAsSlice(&es[1]),
+                endpointAsSlice(&es[2]),
+            },
+        );
+
+        std.sort.block(Endpoint, @constCast(es), {}, std.sort.asc(Endpoint));
+
+        const cycle = (@as(Cycle, @intCast(es[2])) << @bitSizeOf(Endpoint) * 2) |
+            @as(Cycle, @intCast(es[1])) << @bitSizeOf(Endpoint) |
+            @as(Cycle, @intCast(es[0]));
+
+        const cycleh = endpointAsSlice(&es[0]) ++ endpointAsSlice(&es[1]) ++ endpointAsSlice(&es[2]);
+
+        const has_t = blk: {
+            for (es) |e| {
+                if ((e & 0x00ff) ^ @as(@TypeOf(e), 't') == 0) break :blk true;
+            }
+            break :blk false;
+        };
+
+        std.debug.print(
+            "hash = {s}, has_t = {}\n",
+            .{
+                cycleh,
+                has_t,
+            },
+        );
+
+        return try self.data.fetchPut(cycle, {}) == null and has_t;
+    }
+};
 
 /// Reads a graph of connections from the buff.
 /// Call deinit on the result to free the memory.
@@ -70,18 +123,18 @@ fn read_graph(ally: Allocator, buff: []u8) !struct { Graph, Endpoint } {
         // Assign bi-directional connections.
 
         if (graph.getPtr(from)) |connections| {
-            try connections.put(to, void{});
+            try connections.put(to, .Free);
         } else {
             var connections = Connections.init(ally);
-            try connections.put(to, void{});
+            try connections.put(to, .Free);
             try graph.put(from, connections);
         }
 
         if (graph.getPtr(to)) |connections| {
-            try connections.put(from, void{});
+            try connections.put(from, .Free);
         } else {
             var connections = Connections.init(ally);
-            try connections.put(from, void{});
+            try connections.put(from, .Free);
             try graph.put(to, connections);
         }
     }
@@ -89,130 +142,109 @@ fn read_graph(ally: Allocator, buff: []u8) !struct { Graph, Endpoint } {
     return .{ graph, from };
 }
 
-fn process(ally: Allocator, buff: []u8) !usize {
-    var graph, const first = try read_graph(ally, buff);
-    defer graph.deinit();
+fn dfs(graph: *Graph, trackable: Trackable, cycles: *Cycles) !usize {
+    if (trackable.depth == 3) {
+        // if ((trackable.me == trackable.target) and (trackable.pickle < 3)) return 1;
+        return 0;
+    }
 
-    // blk: {
-    //     // Test connections from kh computer.
-    //     const kh = graph.get(endpointFromSlice("kh")) orelse break :blk;
-    //
-    //     var kit = kh.keyIterator();
-    //     while (kit.next()) |key_ptr| {
-    //         std.debug.print("kh-{s}\n", .{endpointAsSlice(key_ptr)});
-    //     }
-    // }
+    var loops: usize = 0;
+    var connections = graph.get(trackable.me).?.iterator();
 
-    var visited = std.AutoHashMap(Endpoint, void).init(ally);
-    defer visited.deinit();
+    while (connections.next()) |connection| {
+        const neighbour: Endpoint = connection.key_ptr.*;
+        const edge: *Connection = connection.value_ptr;
 
-    var queue = Queue.init(ally, void{});
-    defer queue.deinit();
+        if (neighbour == trackable.from) continue;
 
-    try queue.add(
-        Trackable{
-            .me = first,
-            .target = first,
-            .depth = 0,
-        },
-    );
+        // std.debug.print(
+        //     "Want to reach {s} from {s}, continue through {s} at depth {d}, but new pickle will be {d}\n",
+        //     .{
+        //         endpointAsSlice(&trackable.target),
+        //         endpointAsSlice(&trackable.me),
+        //         endpointAsSlice(&neighbour),
+        //         trackable.depth,
+        //         trackable.pickle + @intFromEnum(edge.*),
+        //     },
+        // );
 
-    // var decade: usize = 0;
-    while (queue.removeOrNull()) |trackable| {
-        // if (trackable.depth > 3) continue;
-        if (trackable.me == trackable.target) {
-            // if (trackable.depth == 3) {
-            // Found a loop.
-            std.debug.print("Found a loop to {s}\n", .{endpointAsSlice(&trackable.target)});
-            // continue;
-            // } else if (trackable.depth != 0) continue;
-        } else if ((trackable.depth == 0) and (visited.contains(trackable.me))) {
-            // std.debug.print("??Found a loop to {s}\n", .{endpointAsSlice(&trackable.target)});
+        const npickle = trackable.pickle + @intFromEnum(edge.*);
+        if ((neighbour == trackable.target) and (trackable.depth == 2) and (npickle < 3)) {
+            // edge.* = .Blocked;
+
+            // const dedge = graph.get(neighbour).?.getPtr(trackable.me).?;
+            // dedge.* = .Blocked;
+
+            // std.debug.print(
+            //     "\nLoop {s}-{s}-{s}\n\n",
+            //     .{
+            //         endpointAsSlice(&trackable.target),
+            //         endpointAsSlice(&trackable.me),
+            //         endpointAsSlice(&trackable.from),
+            //     },
+            // );
+
+            // std.debug.print(
+            //     "Marking edge {s}-{s} directional\n",
+            //     .{
+            //         endpointAsSlice(&trackable.me),
+            //         endpointAsSlice(&neighbour),
+            //     },
+            // );
+
+            loops += @intFromBool(
+                try cycles.hash(&.{
+                    trackable.target,
+                    trackable.me,
+                    trackable.from,
+                }),
+            );
+
             continue;
         }
 
-        var from_me = graph.get(trackable.me).?.keyIterator();
-        while (from_me.next()) |target_ptr| {
-            const target: Endpoint = target_ptr.*;
+        const local_loops = try dfs(
+            graph,
+            Trackable{
+                .me = neighbour,
+                .from = trackable.me,
+                .target = trackable.target,
+                .depth = trackable.depth + 1,
+                .pickle = npickle,
+            },
+            cycles,
+        );
 
-            try queue.add(
-                Trackable{
-                    .me = target,
-                    .target = trackable.target,
-                    .depth = trackable.depth + 1,
-                },
-            );
-
-            // if (visited.contains(target)) continue;
-
-            // try queue.add(
-            //     Trackable{
-            //         .me = target,
-            //         .target = target,
-            //         .depth = 0,
-            //     },
-            // );
-        }
-
-        if (trackable.depth == 0) {
-            if (visited.contains(trackable.me)) {
-                std.debug.print("Btw, {any} already visited ({s})\n", .{ trackable, endpointAsSlice(&trackable.me) });
-            }
-            try visited.putNoClobber(trackable.me, void{});
-        } else if (!visited.contains(trackable.me)) {
-            try queue.add(
-                Trackable{
-                    .me = trackable.me,
-                    .target = trackable.target,
-                    .depth = 0,
-                },
-            );
-        }
-
-        // decade += 1;
-        // if (decade > 7) break;
+        loops += local_loops;
     }
 
-    {
-        std.debug.print("After evaluating {s}:\n", .{endpointAsSlice(&first)});
+    return loops;
+}
 
-        while (queue.removeOrNull()) |trackable| {
-            std.debug.print("In Queue: ( {s}->{s}, {d} )\n", .{
-                endpointAsSlice(&trackable.me),
-                endpointAsSlice(&trackable.target),
-                trackable.depth,
-            });
-        }
+fn process(ally: Allocator, buff: []u8) !usize {
+    var graph, _ = try read_graph(ally, buff);
+
+    var cycles = Cycles.init(ally);
+    defer cycles.deinit();
+
+    var loops: usize = 0;
+
+    var kit = graph.keyIterator();
+    while (kit.next()) |key_ptr| {
+        const root = key_ptr.*;
+
+        loops += try dfs(
+            &graph,
+            Trackable{
+                .me = root,
+                .from = root,
+                .target = root,
+                .depth = 0,
+                .pickle = 0,
+            },
+            &cycles,
+        );
     }
-
-    // {
-    //     var it = graph.iterator();
-    //     while (it.next()) |entry| {
-    //         var kit1 = entry.value_ptr.keyIterator();
-    //
-    //         while (kit1.next()) |second_ptr| {
-    //             if (visited.contains(second_ptr.*)) continue;
-    //
-    //             var kit2 = graph.get(second_ptr.*).?.keyIterator();
-    //
-    //             while (kit2.next()) |third_ptr| {
-    //                 if (visited.contains(third_ptr.*)) continue;
-    //
-    //                 if (graph.get(third_ptr.*).?.contains(entry.key_ptr.*)) {
-    //                     std.debug.print("Loop: {s}-{s}-{s}\n", .{
-    //                         endpointAsSlice(entry.key_ptr),
-    //                         endpointAsSlice(second_ptr),
-    //                         endpointAsSlice(third_ptr),
-    //                     });
-    //
-    //                     break;
-    //                 }
-    //             }
-    //         }
-    //
-    //         try visited.put(entry.key_ptr.*, void{});
-    //     }
-    // }
 
     {
         // Free graph values.
@@ -220,9 +252,10 @@ fn process(ally: Allocator, buff: []u8) !usize {
         while (vit.next()) |connections| {
             connections.deinit();
         }
+        graph.deinit();
     }
 
-    return 0;
+    return loops;
 }
 
 pub fn main() !void {
